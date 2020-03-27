@@ -7,6 +7,25 @@ var helmet = require('helmet');
 var session = require('express-session');
 var passport = require('passport');
 
+// モデルの読み込み
+var User = require('./models/user');
+var Schedule = require('./models/schedule');
+var Availability = require('./models/availability');
+var Candidate = require('./models/candidate');
+var Comment = require('./models/comment');
+User.sync().then(() => {
+  Schedule.belongsTo(User, {foreignKey: 'createdBy'});
+  Schedule.sync();
+  Comment.belongsTo(User, {foreignKey: 'userId'});
+  Comment.sync();
+  Availability.belongsTo(User, {foreignKey: 'userId'});
+  Candidate.sync().then(() => {
+    Availability.belongsTo(Candidate, {foreignKey: 'candidateId'});
+    Availability.sync();
+  });
+});
+
+
 var GitHubStrategy = require('passport-github2').Strategy;
 var GITHUB_CLIENT_ID = 'db3a6b45488143a5982e'
 var GITHUB_CLIENT_SECRET = '8dcdbbfc051b41705a70acb003a7aafadb5fe65b'
@@ -27,7 +46,12 @@ passport.use(new GitHubStrategy({
 },
   function (accessToken, refreshToken, profile, done) {
     process.nextTick(function () {
-      return done(null, profile);
+      User.upsert({
+        userId: profile.id,
+        username: profile.username
+      }).then(() => {
+        done(null, profile);
+      });
     });
   }
 ));
@@ -35,6 +59,9 @@ passport.use(new GitHubStrategy({
 var indexRouter = require('./routes/index');
 var loginRouter = require('./routes/login');
 var logoutRouter = require('./routes/logout');
+var schedulesRouter = require('./routes/schedules');
+var availabilitiesRouter = require('./routes/availabilities');
+var commentsRouter = require('./routes/comments');
 
 var app = express();
 app.use(helmet());
@@ -56,6 +83,9 @@ app.use(passport.session());
 app.use('/', indexRouter);
 app.use('/login', loginRouter);
 app.use('/logout', logoutRouter);
+app.use('/schedules', schedulesRouter);
+app.use('/schedules', availabilitiesRouter);
+app.use('/schedules', commentsRouter);
 
 app.get('/auth/github',
   passport.authenticate('github', { scope: ['user:email'] }),
@@ -65,7 +95,16 @@ app.get('/auth/github',
 app.get('/auth/github/callback',
   passport.authenticate('github', { failureRedirect: '/login' }),
   function (req, res) {
-    res.redirect('/');
+    var loginFrom = req.cookies.loginFrom;
+    // オープンリダイレクタ脆弱性対策
+    if (loginFrom &&
+      !loginFrom.includes('http://') &&
+      !loginFrom.includes('https://')) {
+      res.clearCookie('loginFrom');
+      res.redirect(loginFrom);
+    } else {
+      res.redirect('/');
+    }
 });
 
 // catch 404 and forward to error handler
